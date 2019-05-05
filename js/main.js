@@ -565,7 +565,7 @@ void main(void) {
   const renderDensityUniforms = getUniformLocations(gl, renderDensityProgram, ['u_densityTexture']);
   const renderVelocityUniforms = getUniformLocations(gl, renderVelocityProgram, ['u_velocityTexture']);
 
-  const imageTexture = createImageTexture(gl, '../resource/lenna.png');
+  const imageTexture = createImageTexture(gl, './resource/lenna.png');
 
   let requestId = null;
   const reset = function() {
