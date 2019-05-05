@@ -41,6 +41,20 @@
     return texture;
   }
 
+  function createImageTexture(gl, src) {
+    const texture = gl.createTexture();
+    const image = new Image();
+    image.onload = () =>{
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+    };
+    image.src = src;
+    return texture;
+  }
+
   function setUniformTexture(gl, index, texture, location) {
     gl.activeTexture(gl.TEXTURE0 + index);
     gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -80,18 +94,74 @@ void main(void) {
 }
 `;
 
-  const INITIALIZE_DENSITY_FRAGMNET_SHADER_SOURCE =
+  const INITIALIZE_DENSITY_BY_CIRCLE_FRAGMNET_SHADER_SOURCE =
 `#version 300 es
 
 precision highp float;
 
-out float o_density;
+out vec3 o_density;
 
 uniform vec2 u_resolution;
-uniform float u_gridSpacing;
 
 void main(void) {
-  o_density = smoothstep(0.25, 0.2, length(gl_FragCoord.xy - 0.5 * u_resolution) * u_gridSpacing);
+  vec2 st = (2.0 * gl_FragCoord.xy - u_resolution) / min(u_resolution.x, u_resolution.y);
+  float density = smoothstep(0.51, 0.50, length(st));
+  o_density = vec3(density);
+}
+`;
+
+  const INITIALIZE_DENSITY_BY_CHECKER_FRAGMENT_SHADER_SOURCE =
+`#version 300 es
+
+precision highp float;
+
+out vec3 o_density;
+
+uniform vec2 u_resolution;
+
+void main(void) {
+  vec2 st = gl_FragCoord.xy / u_resolution * 30.0;
+  ivec2 idx = ivec2(st);
+
+  int pattern = (idx.x + idx.y) % 3;
+  if (pattern == 0) {
+    o_density = vec3(1.0, 1.0, 0.0);
+  } else if (pattern == 1) {
+    o_density = vec3(1.0, 0.0, 1.0);
+  } else {
+    o_density = vec3(0.0, 1.0, 1.0);
+  }
+}
+`
+
+  const INITIALIZE_DENSITY_BY_IMAGE_FRAGMENT_SHADER_SOURCE =
+`#version 300 es
+
+precision highp float;
+
+out vec3 o_density;
+
+uniform sampler2D u_imageTexture;
+uniform vec2 u_resolution;
+
+void main(void) {
+  vec2 textureSize = vec2(textureSize(u_imageTexture, 0));
+  vec2 st = (2.0 * gl_FragCoord.xy - u_resolution) / min(u_resolution.x, u_resolution.y);
+
+  if (u_resolution.x > u_resolution.y) {
+    st.x *= textureSize.y / textureSize.x;
+  } else {
+    st.y *= textureSize.x / textureSize.y;
+  }
+
+  vec2 uv = st * 0.5 + 0.5;
+  uv = vec2(uv.x, 1.0 - uv.y);
+
+  vec3 density = vec3(0.0);
+  if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) {
+    density = texture(u_imageTexture, uv).xyz;
+  }
+  o_density = density;
 }
 `;
 
@@ -100,12 +170,12 @@ void main(void) {
 
 precision highp float;
 
-out float o_density;
+out vec3 o_density;
 
 uniform sampler2D u_densityTexture;
 
 void main(void) {
-  float density = texelFetch(u_densityTexture, ivec2(gl_FragCoord.xy), 0).x;
+  vec3 density = texelFetch(u_densityTexture, ivec2(gl_FragCoord.xy), 0).xyz;
   o_density = density;
 }
 `;
@@ -115,7 +185,7 @@ void main(void) {
 
 precision highp float;
 
-out float o_density;
+out vec3 o_density;
 
 uniform sampler2D u_densityTexture;
 uniform float u_deltaTime;
@@ -125,11 +195,11 @@ uniform float u_diffuseCoef;
 void main(void) {
   ivec2 coord = ivec2(gl_FragCoord.xy);
 
-  float center = texelFetch(u_densityTexture, coord, 0).x;
-  float left = texelFetch(u_densityTexture, coord + ivec2(-1, 0), 0).x;
-  float right = texelFetch(u_densityTexture, coord + ivec2(1, 0), 0).x;
-  float down = texelFetch(u_densityTexture, coord + ivec2(0, -1), 0).x;
-  float up = texelFetch(u_densityTexture, coord + ivec2(0, 1), 0).x;
+  vec3 center = texelFetch(u_densityTexture, coord, 0).xyz;
+  vec3 left = texelFetch(u_densityTexture, coord + ivec2(-1, 0), 0).xyz;
+  vec3 right = texelFetch(u_densityTexture, coord + ivec2(1, 0), 0).xyz;
+  vec3 down = texelFetch(u_densityTexture, coord + ivec2(0, -1), 0).xyz;
+  vec3 up = texelFetch(u_densityTexture, coord + ivec2(0, 1), 0).xyz;
 
   float a = u_deltaTime * u_diffuseCoef / (u_gridSpacing * u_gridSpacing);
   o_density = (center + a * (left + right + down + up)) / (1.0 + 4.0 * a);
@@ -141,7 +211,7 @@ void main(void) {
 
 precision highp float;
 
-out float o_density;
+out vec3 o_density;
 
 uniform sampler2D u_velocityTexture;
 uniform sampler2D u_densityTexture;
@@ -158,10 +228,10 @@ void main(void) {
   ivec2 i = ivec2(prevCoord);
   vec2 f = fract(prevCoord);
 
-  float density00 = texelFetch(u_densityTexture, i, 0).x;
-  float density10 = texelFetch(u_densityTexture, i + ivec2(1, 0), 0).x;
-  float density01 = texelFetch(u_densityTexture, i + ivec2(0, 1), 0).x;
-  float density11 = texelFetch(u_densityTexture, i + ivec2(1, 1), 0).x;
+  vec3 density00 = texelFetch(u_densityTexture, i, 0).xyz;
+  vec3 density10 = texelFetch(u_densityTexture, i + ivec2(1, 0), 0).xyz;
+  vec3 density01 = texelFetch(u_densityTexture, i + ivec2(0, 1), 0).xyz;
+  vec3 density11 = texelFetch(u_densityTexture, i + ivec2(1, 1), 0).xyz;
 
   o_density = mix(mix(density00, density10, f.x), mix(density01, density11, f.x), f.y);
 }
@@ -176,12 +246,15 @@ out vec2 o_velocity;
 
 uniform sampler2D u_velocityTexture;
 uniform float u_deltaTime;
+uniform float u_gridSpacing;
 uniform vec2 u_forceCenter;
 uniform vec2 u_forceDir;
+uniform float u_forceIntensity;
+uniform float u_forceRadius;
 
 void main(void) {
   vec2 velocity = texelFetch(u_velocityTexture, ivec2(gl_FragCoord.xy), 0).xy;
-  vec2 force = length(u_forceCenter - gl_FragCoord.xy) < 10.0 ? u_forceDir * 0.1 : vec2(0.0);
+  vec2 force = smoothstep(u_forceRadius, 0.0,  length(u_forceCenter - gl_FragCoord.xy) * u_gridSpacing) * u_forceDir * u_forceIntensity;
   o_velocity = velocity + u_deltaTime * force;
 }
 `;
@@ -366,8 +439,8 @@ uniform sampler2D u_densityTexture;
 out vec4 o_color;
 
 void main(void) {
-  float density = texelFetch(u_densityTexture, ivec2(gl_FragCoord.xy), 0).x;
-  o_color = vec4(vec3(density), 1.0);
+  vec3 density = texelFetch(u_densityTexture, ivec2(gl_FragCoord.xy), 0).xyz;
+  o_color = vec4(density, 1.0);
 }
 `;
 
@@ -387,7 +460,7 @@ void main(void) {
   function createDensityFramebuffer(gl, width, height) {
     const framebuffer = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
-    const densityTexture = createTexture(gl, width, height, gl.R32F, gl.RED, gl.FLOAT);
+    const densityTexture = createTexture(gl, width, height, gl.RGBA32F, gl.RGBA, gl.FLOAT);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, densityTexture, 0);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.bindTexture(gl.TEXTURE_2D, null);
@@ -421,7 +494,7 @@ void main(void) {
     prevMousePosition = mousePosition;
     mousePosition = new Vector2(event.clientX, window.innerHeight - event.clientY);
     if (!Vector2.equals(prevMousePosition, mousePosition)) {
-      mouseDir = Vector2.sub(mousePosition, prevMousePosition).norm().mul(1000.0);
+      mouseDir = Vector2.sub(mousePosition, prevMousePosition).norm();
       mouseMoved = true;
     }
   });
@@ -436,25 +509,33 @@ void main(void) {
 
   const parameters = {
     'grid spacing': 0.001,
+    'force radius': 0.01,
+    'force intensity': 100.0,
     'diffuse coef': 0.0,
     'time step': 0.005,
     'time scale': 1.0,
     'render': 'density',
+    'initial density': 'circle',
     'reset': _ => reset()
   };
 
   const gui = new dat.GUI();
+  gui.add(parameters, 'force radius', 0.001, 0.03).step(0.001);
+  gui.add(parameters, 'force intensity', 0.0, 200.0).step(0.1);
   gui.add(parameters, 'diffuse coef', 0.0, 0.1).step(0.0001);
   gui.add(parameters, 'time step', 0.0001, 0.01).step(0.0001);
   gui.add(parameters, 'time scale', 0.5, 2.0).step(0.001);
   gui.add(parameters, 'render', ['density', 'velocity']);
+  gui.add(parameters, 'initial density', ['circle', 'checker', 'image']).onChange(_ => reset());
   gui.add(parameters, 'reset');
 
   const canvas = document.getElementById('canvas');
   const gl = canvas.getContext('webgl2');
   gl.getExtension('EXT_color_buffer_float');
 
-  const initializeDensityProgram = createProgramFromSource(gl, FILL_VIEWPORT_VERTEX_SHADER_SOURCE, INITIALIZE_DENSITY_FRAGMNET_SHADER_SOURCE);
+  const initializeDensityByCircleProgram = createProgramFromSource(gl, FILL_VIEWPORT_VERTEX_SHADER_SOURCE, INITIALIZE_DENSITY_BY_CIRCLE_FRAGMNET_SHADER_SOURCE);
+  const initializeDensityByCheckerProgram = createProgramFromSource(gl, FILL_VIEWPORT_VERTEX_SHADER_SOURCE, INITIALIZE_DENSITY_BY_CHECKER_FRAGMENT_SHADER_SOURCE);
+  const initializesDensityByImageProgram = createProgramFromSource(gl, FILL_VIEWPORT_VERTEX_SHADER_SOURCE, INITIALIZE_DENSITY_BY_IMAGE_FRAGMENT_SHADER_SOURCE);
   const initializeVelocityProgram = createProgramFromSource(gl, FILL_VIEWPORT_VERTEX_SHADER_SOURCE, INITIALIZE_VELOCITY_FRAGMENT_SHADER_SOURCE);
   const addDensitySourceProgram = createProgramFromSource(gl, FILL_VIEWPORT_VERTEX_SHADER_SOURCE, ADD_DENSITY_SOURCE_FRAGMENT_SHADER_SOURCE);
   const diffuseDensityProgram = createProgramFromSource(gl, FILL_VIEWPORT_VERTEX_SHADER_SOURCE, DIFFUSE_DENSITY_FRAGMENT_SAHDER_SOURCE);
@@ -468,12 +549,14 @@ void main(void) {
   const renderDensityProgram = createProgramFromSource(gl, FILL_VIEWPORT_VERTEX_SHADER_SOURCE, RENDER_DENSITY_FRAGMENT_SHADER_SOURCE);
   const renderVelocityProgram = createProgramFromSource(gl, FILL_VIEWPORT_VERTEX_SHADER_SOURCE, RENDER_VELOCITY_FRAGMENT_SHADER_SOURCE);
 
-  const initializeDensityUniforms = getUniformLocations(gl, initializeDensityProgram, ['u_resolution', 'u_gridSpacing']);
+  const initializeDensityByCircleUniforms = getUniformLocations(gl, initializeDensityByCircleProgram, ['u_resolution']);
+  const initializeDensityByCheckerUniforms = getUniformLocations(gl, initializeDensityByCheckerProgram, ['u_resolution']);
+  const initializesDensityByImageUniforms = getUniformLocations(gl, initializesDensityByImageProgram, ['u_resolution', 'u_imageTexture']);
   const initializeVelocityUniforms = getUniformLocations(gl, initializeVelocityProgram, []);
   const addDensitySourceUniforms = getUniformLocations(gl, addDensitySourceProgram, ['u_densityTexture']);
   const diffuseDensityUniforms = getUniformLocations(gl, diffuseDensityProgram, ['u_densityTexture', 'u_deltaTime', 'u_gridSpacing', 'u_diffuseCoef']);
   const advectDensityUniforms = getUniformLocations(gl, advectDensityProgram, ['u_velocityTexture', 'u_densityTexture', 'u_gridSpacing', 'u_deltaTime']);
-  const addExternalForceUniforms = getUniformLocations(gl, addExternalForceProgram, ['u_velocityTexture', 'u_deltaTime', 'u_forceCenter', 'u_forceDir']);
+  const addExternalForceUniforms = getUniformLocations(gl, addExternalForceProgram, ['u_velocityTexture', 'u_deltaTime', 'u_gridSpacing', 'u_forceCenter', 'u_forceDir', 'u_forceIntensity', 'u_forceRadius']);
   const diffuseVelocityUniforms = getUniformLocations(gl, diffuseVelocityProgram, ['u_velocityTexture', 'u_deltaTime', 'u_gridSpacing', 'u_diffuseCoef']);
   const advectVelocityUniforms = getUniformLocations(gl, advectVelocityProgram, ['u_velocityTexture', 'u_gridSpacing', 'u_deltaTime']);
   const projectStep1Uniforms = getUniformLocations(gl, projectStep1Program, ['u_velocityTexture', 'u_gridSpacing']);
@@ -482,7 +565,7 @@ void main(void) {
   const renderDensityUniforms = getUniformLocations(gl, renderDensityProgram, ['u_densityTexture']);
   const renderVelocityUniforms = getUniformLocations(gl, renderVelocityProgram, ['u_velocityTexture']);
 
-
+  const imageTexture = createImageTexture(gl, '../resource/lenna.png');
 
   let requestId = null;
   const reset = function() {
@@ -526,23 +609,44 @@ void main(void) {
       swapVelocityFbObj();
     };
 
-    const initializeDensity = function() {
+    const initializeDensityByCircle = function() {
       gl.bindFramebuffer(gl.FRAMEBUFFER, densityFbObjW.framebuffer);
-      gl.useProgram(initializeDensityProgram);
-      gl.uniform2f(initializeDensityUniforms['u_resolution'], canvas.width, canvas.height);
-      gl.uniform1f(initializeDensityUniforms['u_gridSpacing'], parameters['grid spacing']);
+      gl.useProgram(initializeDensityByCircleProgram);
+      gl.uniform2f(initializeDensityByCircleUniforms['u_resolution'], canvas.width, canvas.height);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       swapDensityFbObj();
     };
+
+    const initializeDensityByChecker = function() {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, densityFbObjW.framebuffer);
+      gl.useProgram(initializeDensityByCheckerProgram);
+      gl.uniform2f(initializeDensityByCheckerUniforms['u_resolution'], canvas.width, canvas.height);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      swapDensityFbObj();
+    }
+
+    const initializeDensityByImage =function() {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, densityFbObjW.framebuffer);
+      gl.useProgram(initializesDensityByImageProgram);
+      setUniformTexture(gl, 0, imageTexture, initializesDensityByImageUniforms['u_imageTexture']);
+      gl.uniform2f(initializesDensityByImageUniforms['u_resolution'], canvas.width, canvas.height);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      swapDensityFbObj();
+    }
 
     const addExternalForce = function(deltaTime) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, velocityFbObjW.framebuffer);
       gl.useProgram(addExternalForceProgram);
       setUniformTexture(gl, 0, velocityFbObjR.velocityTexture, addExternalForceUniforms['u_velocityTexture']);
       gl.uniform1f(addExternalForceUniforms['u_deltaTime'], deltaTime);
+      gl.uniform1f(addExternalForceUniforms['u_gridSpacing'], parameters['grid spacing']);
       gl.uniform2fv(addExternalForceUniforms['u_forceCenter'], mousePosition.toArray());
       gl.uniform2fv(addExternalForceUniforms['u_forceDir'], mouseDir.toArray());
+      gl.uniform1f(addExternalForceUniforms['u_forceIntensity'], parameters['force intensity']);
+      gl.uniform1f(addExternalForceUniforms['u_forceRadius'], parameters['force radius']);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       swapVelocityFbObj();
@@ -690,12 +794,18 @@ void main(void) {
     let simulationSeconds = 0.0;
     let previousRealSeconds = performance.now() * 0.001;
     initializeVelocity();
-    initializeDensity();
+    if (parameters['initial density'] === 'circle') {
+      initializeDensityByCircle();
+    } else if (parameters['initial density'] === 'checker') {
+      initializeDensityByChecker();
+    } else {
+      initializeDensityByImage();
+    }
     const loop = function() {
       stats.update();
 
       const currentRealSeconds = performance.now() * 0.001;
-      const nextSimulationSeconds = simulationSeconds + parameters['time scale'] * Math.min(0.05, currentRealSeconds - previousRealSeconds);
+      const nextSimulationSeconds = simulationSeconds + parameters['time scale'] * Math.min(0.02, currentRealSeconds - previousRealSeconds);
       previousRealSeconds = currentRealSeconds;
       const timeStep = parameters['time step'];
       while(nextSimulationSeconds - simulationSeconds > timeStep) {
