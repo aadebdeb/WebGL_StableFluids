@@ -796,6 +796,7 @@ void main(void) {
     };
 
     let simulationSeconds = 0.0;
+    let remaindedSimulationSeconds = 0.0;
     let previousRealSeconds = performance.now() * 0.001;
     initializeVelocity();
     if (parameters['initial density'] === 'circle') {
@@ -809,13 +810,14 @@ void main(void) {
       stats.update();
 
       const currentRealSeconds = performance.now() * 0.001;
-      const nextSimulationSeconds = simulationSeconds + parameters['time scale'] * Math.min(0.02, currentRealSeconds - previousRealSeconds);
+      const nextSimulationSeconds = simulationSeconds + remaindedSimulationSeconds + parameters['time scale'] * Math.min(0.02, currentRealSeconds - previousRealSeconds);
       previousRealSeconds = currentRealSeconds;
       const timeStep = parameters['time step'];
       while(nextSimulationSeconds - simulationSeconds > timeStep) {
         stepSimulation(timeStep);
         simulationSeconds += timeStep;
       }
+      remaindedSimulationSeconds = nextSimulationSeconds - simulationSeconds;
 
       render();
       mouseMoved = false;
