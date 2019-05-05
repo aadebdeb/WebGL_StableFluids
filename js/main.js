@@ -719,7 +719,9 @@ void main(void) {
       if (mousePressing && mouseMoved) {
         addExternalForce(deltaTime);
       }
-      diffuseVelocity(deltaTime);
+      if (parameters['diffuse coef'] > 0.0) {
+        diffuseVelocity(deltaTime);
+      }
       projectVelocity();
       advectVelocity(deltaTime);
       projectVelocity();
@@ -762,7 +764,9 @@ void main(void) {
 
     const updateDensity = function(deltaTime) {
       addDensitySource();
-      diffuseDensity(deltaTime);
+      if (parameters['diffuse coef'] > 0.0) {
+        diffuseDensity(deltaTime);
+      }
       advectDensity(deltaTime);
     };
 
